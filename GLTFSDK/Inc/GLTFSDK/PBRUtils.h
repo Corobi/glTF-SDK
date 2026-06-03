@@ -6,6 +6,8 @@
 #include <GLTFSDK/Color.h>
 #include <GLTFSDK/ExtensionsKHR.h>
 
+#include <limits>
+
 namespace Microsoft
 {
     namespace glTF
@@ -48,7 +50,7 @@ namespace Microsoft
                 return std::sqrt(r + g + b);
             }
 
-            float SolveMetallic(float dielectricSpecular, float diffuse, float specular, float oneMinusSpecularStrength);
+            float GLTFSDK_API SolveMetallic(float dielectricSpecular, float diffuse, float specular, float oneMinusSpecularStrength);
         }
 
         template<typename TColor>
@@ -131,7 +133,7 @@ namespace Microsoft
             return mr;
         }
 
-        MetallicRoughnessValue SGToMR(const SpecularGlossinessValue& sg);
+        MetallicRoughnessValue GLTFSDK_API SGToMR(const SpecularGlossinessValue& sg);
 
         template<typename TColor>
         inline SpecularGlossinessValueTypeless<TColor> MRToSG(const MetallicRoughnessValueTypeless<TColor>& mr)
@@ -152,6 +154,6 @@ namespace Microsoft
             return sg;
         }
 
-        SpecularGlossinessValue MRToSG(const MetallicRoughnessValue& mr);
+        SpecularGlossinessValue GLTFSDK_API MRToSG(const MetallicRoughnessValue& mr);
     }
 }

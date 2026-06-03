@@ -5,6 +5,7 @@
 
 #include <GLTFSDK/Exceptions.h>
 
+#include <limits>
 #include <set>
 #include <regex>
 #include <sstream>
@@ -73,7 +74,7 @@ std::tuple<uint32_t, uint32_t> Version::AsTuple(const char* version)
     }
 }
 
-bool Microsoft::glTF::IsMinVersionRequirementSatisfied(const Version& minVersion, std::initializer_list<Version> supported)
+bool GLTFSDK_API Microsoft::glTF::IsMinVersionRequirementSatisfied(const Version& minVersion, std::initializer_list<Version> supported)
 {
     if (supported.size() == 0U)
     {
@@ -100,7 +101,7 @@ bool Microsoft::glTF::IsMinVersionRequirementSatisfied(const Version& minVersion
     return false;
 }
 
-bool Microsoft::glTF::IsMinVersionRequirementSatisfied(const std::string& minVersion, std::initializer_list<Version> supported)
+bool GLTFSDK_API Microsoft::glTF::IsMinVersionRequirementSatisfied(const std::string& minVersion, std::initializer_list<Version> supported)
 {
     if (supported.size() == 0U)
     {

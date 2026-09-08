@@ -16,12 +16,53 @@ using namespace Microsoft::glTF;
 
 namespace
 {
+    // Returns the fixed-size JSON array referenced by 'memberName' from
+    // node 'v', validating that:
+    //   - the member exists and is a JSON array,
+    //   - the array has exactly 'expectedSize' elements,
+    //   - every element is a JSON number.
+    // Throws InvalidGLTFException with the supplied 'arrayDescription' if
+    // any of these conditions are not met. Used by the node transform
+    // parsers (scale/translation/rotation/matrix), which read into
+    // fixed-size float arrays and previously relied on rapidjson::Value
+    // accessors that are only well-defined for arrays of numeric elements.
+    const rapidjson::Value& GetFixedSizeNumericArray(
+        const rapidjson::Value& v,
+        const char* memberName,
+        size_t expectedSize,
+        const char* arrayDescription)
+    {
+        auto it = v.FindMember(memberName);
+        // Defensive: callers are expected to have already handled the
+        // missing-member case (these fields are optional with default
+        // values in glTF), but dereferencing v.MemberEnd() is undefined
+        // behaviour, so guard inside the helper too.
+        if (it == v.MemberEnd())
+        {
+            throw InvalidGLTFException(arrayDescription);
+        }
+        const rapidjson::Value& a = it->value;
+        if (!a.IsArray() || a.Size() != expectedSize)
+        {
+            throw InvalidGLTFException(arrayDescription);
+        }
+        for (rapidjson::Value::ConstValueIterator ait = a.Begin(); ait != a.End(); ++ait)
+        {
+            if (!ait->IsNumber())
+            {
+                throw InvalidGLTFException(arrayDescription);
+            }
+        }
+        return a;
+    }
+
     void ParseExtensions(const rapidjson::Value& v, glTFProperty& node, const ExtensionDeserializer& extensionDeserializer)
     {
         const auto& extensionsIt = v.FindMember("extensions");
         if (extensionsIt != v.MemberEnd())
         {
             const rapidjson::Value& extensionsObject = extensionsIt->value;
+            RequireObject(extensionsObject, "The extensions member must be a JSON object");
             for (const auto& entry : extensionsObject.GetObject())
             {
                 ExtensionPair extensionPair = { entry.name.GetString(), Serialize(entry.value) };
@@ -57,7 +98,15 @@ namespace
 
     void ParseTextureInfo(const rapidjson::Value& v, TextureInfo& textureInfo, const ExtensionDeserializer& extensionDeserializer)
     {
+        if (!v.IsObject())
+        {
+            throw InvalidGLTFException("TextureInfo must be a JSON object");
+        }
         auto textureIndexIt = FindRequiredMember("index", v);
+        if (!textureIndexIt->value.IsUint())
+        {
+            throw InvalidGLTFException("TextureInfo.index must be an unsigned integer");
+        }
         textureInfo.textureId = std::to_string(textureIndexIt->value.GetUint());
         textureInfo.texCoord = GetMemberValueOrDefault<size_t>(v, "texCoord", 0U);
         ParseProperty(v, textureInfo, extensionDeserializer);
@@ -75,10 +124,17 @@ namespace
         rapidjson::Value::ConstMemberIterator it;
         if (TryFindMember(name, value, it))
         {
+            if (!it->value.IsArray())
+            {
+                throw InvalidGLTFException(std::string(name) + " must be a JSON array");
+            }
+
+            const std::string elementError = std::string(name) + " array elements must be JSON objects";
             size_t index = 0;
 
             for (auto& valueArray : it->value.GetArray())
             {
+                RequireObject(valueArray, elementError.c_str());
                 try
                 {
                     const auto& item = items.Append(fn(valueArray, extensionDeserializer), AppendIdPolicy::GenerateOnEmpty);
@@ -252,6 +308,7 @@ namespace
         rapidjson::Value::ConstMemberIterator it = v.FindMember("attributes");
         if (it != v.MemberEnd())
         {
+            RequireObject(it->value, "MeshPrimitive attributes must be a JSON object");
             const auto& attributes = it->value.GetObject();
 
             for (const auto& attribute : attributes)
@@ -297,7 +354,6 @@ namespace
 
     void ParseNodeScale(const rapidjson::Value& v, Node& node)
     {
-        const int scaleCapacity = 3;
         auto it = v.FindMember("scale");
         if (it == v.MemberEnd())
         {
@@ -305,11 +361,8 @@ namespace
             return;
         }
 
-        const rapidjson::Value& a = it->value;
-        if (a.Capacity() != scaleCapacity)
-        {
-            throw InvalidGLTFException("A node must have a scale with 3 elements");
-        }
+        const rapidjson::Value& a = GetFixedSizeNumericArray(v, "scale", 3U,
+            "A node must have a scale with 3 numeric elements");
 
         rapidjson::Value::ConstValueIterator ait = a.Begin();
         node.scale.x = ait++->GetFloat();
@@ -319,7 +372,6 @@ namespace
 
     void ParseNodeTranslation(const rapidjson::Value& v, Node& node)
     {
-        const int translationCapacity = 3;
         auto it = v.FindMember("translation");
         if (it == v.MemberEnd())
         {
@@ -327,11 +379,8 @@ namespace
             return;
         }
 
-        const rapidjson::Value& a = it->value;
-        if (a.Capacity() != translationCapacity)
-        {
-            throw InvalidGLTFException("A node must have a translation with 3 elements");
-        }
+        const rapidjson::Value& a = GetFixedSizeNumericArray(v, "translation", 3U,
+            "A node must have a translation with 3 numeric elements");
 
         rapidjson::Value::ConstValueIterator ait = a.Begin();
         node.translation.x = ait++->GetFloat();
@@ -341,7 +390,6 @@ namespace
 
     void ParseNodeRotation(const rapidjson::Value& v, Node& node)
     {
-        const int rotationCapacity = 4;
         auto it = v.FindMember("rotation");
         if (it == v.MemberEnd())
         {
@@ -349,11 +397,8 @@ namespace
             return;
         }
 
-        const rapidjson::Value& a = it->value;
-        if (a.Capacity() != rotationCapacity)
-        {
-            throw InvalidGLTFException("A node must have a rotation with 4 elements");
-        }
+        const rapidjson::Value& a = GetFixedSizeNumericArray(v, "rotation", 4U,
+            "A node must have a rotation with 4 numeric elements");
 
         rapidjson::Value::ConstValueIterator ait = a.Begin();
         node.rotation.x = ait++->GetFloat();
@@ -373,11 +418,8 @@ namespace
             return;
         }
 
-        const rapidjson::Value& a = it->value;
-        if (a.Capacity() != 16)
-        {
-            throw InvalidGLTFException("A node must have a matrix transform with 16 elements");
-        }
+        const rapidjson::Value& a = GetFixedSizeNumericArray(v, "matrix", 16U,
+            "A node must have a matrix transform with 16 numeric elements");
 
         uint8_t index = 0;
         for (rapidjson::Value::ConstValueIterator ait = a.Begin(); ait != a.End(); ++ait)
@@ -393,9 +435,20 @@ namespace
         if (it != v.MemberEnd())
         {
             const rapidjson::Value& a = it->value;
-            node.children.reserve(a.Capacity());
+            // children is an array of node indices; anything else must be
+            // rejected before reading array accessors, which are only
+            // well-defined on a JSON array.
+            if (!a.IsArray())
+            {
+                throw InvalidGLTFException("Node children must be a JSON array");
+            }
+            node.children.reserve(a.Size());
             for (rapidjson::Value::ConstValueIterator ait = a.Begin(); ait != a.End(); ++ait)
             {
+                if (!ait->IsUint())
+                {
+                    throw InvalidGLTFException("Node children array elements must be unsigned integers");
+                }
                 node.children.push_back(std::to_string(ait->GetUint()));
             }
         }
@@ -413,6 +466,7 @@ namespace
             {
                 throw InvalidGLTFException("Camera perspective projection undefined");
             }
+            RequireObject(perspectiveIt->value, "Camera perspective must be a JSON object");
 
             Optional<float> aspectRatio;
 
@@ -449,6 +503,7 @@ namespace
             {
                 throw InvalidGLTFException("Camera orthographic projection undefined");
             }
+            RequireObject(orthographicIt->value, "Camera orthographic must be a JSON object");
 
             float xmag = GetValue<float>(FindRequiredMember("xmag", orthographicIt->value)->value);
             float ymag = GetValue<float>(FindRequiredMember("ymag", orthographicIt->value)->value);
@@ -669,6 +724,7 @@ namespace
         auto mit = v.FindMember("pbrMetallicRoughness");
         if (mit != v.MemberEnd())
         {
+            RequireObject(mit->value, "pbrMetallicRoughness must be a JSON object");
             auto& pbrMr = mit->value;
 
             // Diffuse
@@ -679,6 +735,10 @@ namespace
                 for (rapidjson::Value::ConstValueIterator ait = baseColorFactorIt->value.Begin(); ait != baseColorFactorIt->value.End(); ++ait)
                 {
                     baseColorFactor.push_back(static_cast<float>(ait->GetDouble()));
+                }
+                if (baseColorFactor.size() != 4)
+                {
+                    throw InvalidGLTFException("baseColorFactor must be an array of 4 numeric elements");
                 }
                 material.metallicRoughness.baseColorFactor = Color4(baseColorFactor[0], baseColorFactor[1], baseColorFactor[2], baseColorFactor[3]);
             }
@@ -730,6 +790,10 @@ namespace
             for (rapidjson::Value::ConstValueIterator ait = emissionFactorIt->value.Begin(); ait != emissionFactorIt->value.End(); ++ait)
             {
                 emissiveFactor.push_back(static_cast<float>(ait->GetDouble()));
+            }
+            if (emissiveFactor.size() != 3)
+            {
+                throw InvalidGLTFException("emissiveFactor must be an array of 3 numeric elements");
             }
             material.emissiveFactor = Color3(emissiveFactor[0], emissiveFactor[1], emissiveFactor[2]);
         }

@@ -10,12 +10,37 @@ using namespace Microsoft::glTF;
 
 namespace
 {
+    // Validates that 'v' is a JSON array of exactly 'expectedSize'
+    // elements, each of which is a JSON number. Throws
+    // InvalidGLTFException with 'description' on any mismatch. Used by
+    // every fixed-size numeric array field in the extension
+    // deserializers (e.g. KHR_materials_sheen.sheenColorFactor,
+    // KHR_materials_pbrSpecularGlossiness.diffuseFactor).
+    void RequireFixedSizeNumericArray(
+        const rapidjson::Value& v,
+        size_t expectedSize,
+        const char* description)
+    {
+        if (!v.IsArray() || v.Size() != expectedSize)
+        {
+            throw InvalidGLTFException(description);
+        }
+        for (rapidjson::Value::ConstValueIterator ait = v.Begin(); ait != v.End(); ++ait)
+        {
+            if (!ait->IsNumber())
+            {
+                throw InvalidGLTFException(description);
+            }
+        }
+    }
+
     void ParseExtensions(const rapidjson::Value& v, glTFProperty& node, const ExtensionDeserializer& extensionDeserializer)
     {
         const auto& extensionsIt = v.FindMember("extensions");
         if (extensionsIt != v.MemberEnd())
         {
             const rapidjson::Value& extensionsObject = extensionsIt->value;
+            RequireObject(extensionsObject, "The extensions member must be a JSON object");
             for (const auto& entry : extensionsObject.GetObject())
             {
                 ExtensionPair extensionPair = { entry.name.GetString(), Serialize(entry.value) };
@@ -51,7 +76,12 @@ namespace
 
     void ParseTextureInfo(const rapidjson::Value& v, TextureInfo& textureInfo, const ExtensionDeserializer& extensionDeserializer)
     {
+        RequireObject(v, "TextureInfo must be a JSON object");
         auto textureIndexIt = FindRequiredMember("index", v);
+        if (!textureIndexIt->value.IsUint())
+        {
+            throw InvalidGLTFException("TextureInfo.index must be an unsigned integer");
+        }
         textureInfo.textureId = std::to_string(textureIndexIt->value.GetUint());
         textureInfo.texCoord = GetMemberValueOrDefault<size_t>(v, "texCoord", 0U);
         ParseProperty(v, textureInfo, extensionDeserializer);
@@ -250,20 +280,15 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializePBRSpecGloss(c
     Materials::PBRSpecularGlossiness specGloss;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const rapidjson::Value& sit = doc;
 
     // Diffuse Factor
     auto diffuseFactIt = sit.FindMember("diffuseFactor");
     if (diffuseFactIt != sit.MemberEnd())
     {
-        if (!diffuseFactIt->value.IsArray())
-        {
-            throw GLTFException("diffuseFactor must be an array");
-        }
-        if (diffuseFactIt->value.Size() != 4)
-        {
-            throw GLTFException("diffuseFactor must have exactly 4 elements");
-        }
+        RequireFixedSizeNumericArray(diffuseFactIt->value, 4U,
+            "diffuseFactor must be a JSON array of 4 numeric elements");
         specGloss.diffuseFactor = Color4(
             static_cast<float>(diffuseFactIt->value[0].GetDouble()),
             static_cast<float>(diffuseFactIt->value[1].GetDouble()),
@@ -282,14 +307,8 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializePBRSpecGloss(c
     auto specularFactIt = sit.FindMember("specularFactor");
     if (specularFactIt != sit.MemberEnd())
     {
-        if (!specularFactIt->value.IsArray())
-        {
-            throw GLTFException("specularFactor must be an array");
-        }
-        if (specularFactIt->value.Size() != 3)
-        {
-            throw GLTFException("specularFactor must have exactly 3 elements");
-        }
+        RequireFixedSizeNumericArray(specularFactIt->value, 3U,
+            "specularFactor must be a JSON array of 3 numeric elements");
         specGloss.specularFactor = Color3(
             static_cast<float>(specularFactIt->value[0].GetDouble()),
             static_cast<float>(specularFactIt->value[1].GetDouble()),
@@ -432,6 +451,7 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeClearcoat(cons
     Materials::Clearcoat clearcoat;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Clearcoat Factor
@@ -543,18 +563,19 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeVolume(const s
     Materials::Volume volume;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Attenuation Color
     const auto attenuationColorIt = sit.FindMember("attenuationColor");
     if (attenuationColorIt != sit.MemberEnd())
     {
-        std::vector<float> attenuationColor;
-        for (rapidjson::Value::ConstValueIterator ait = attenuationColorIt->value.Begin(); ait != attenuationColorIt->value.End(); ++ait)
-        {
-            attenuationColor.push_back(static_cast<float>(ait->GetDouble()));
-        }
-        volume.attenuationColor = Color3(attenuationColor[0], attenuationColor[1], attenuationColor[2]);
+        RequireFixedSizeNumericArray(attenuationColorIt->value, 3U,
+            "attenuationColor must be a JSON array of 3 numeric elements");
+        volume.attenuationColor = Color3(
+            static_cast<float>(attenuationColorIt->value[0].GetDouble()),
+            static_cast<float>(attenuationColorIt->value[1].GetDouble()),
+            static_cast<float>(attenuationColorIt->value[2].GetDouble()));
     }
 
     // Attenuation Distance
@@ -667,6 +688,7 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeIridescence(co
     Materials::Iridescence iridescence;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Iridescence Factor
@@ -771,6 +793,7 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeTransmission(c
     Materials::Transmission transmission;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Transmission Factor
@@ -862,18 +885,19 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeSheen(const st
     Materials::Sheen sheen;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Sheen Color Factor
     const auto colorFactorIt = sit.FindMember("sheenColorFactor");
     if (colorFactorIt != sit.MemberEnd())
     {
-        std::vector<float> colorFactor;
-        for (rapidjson::Value::ConstValueIterator ait = colorFactorIt->value.Begin(); ait != colorFactorIt->value.End(); ++ait)
-        {
-            colorFactor.push_back(static_cast<float>(ait->GetDouble()));
-        }
-        sheen.colorFactor = Color3(colorFactor[0], colorFactor[1], colorFactor[2]);
+        RequireFixedSizeNumericArray(colorFactorIt->value, 3U,
+            "sheenColorFactor must be a JSON array of 3 numeric elements");
+        sheen.colorFactor = Color3(
+            static_cast<float>(colorFactorIt->value[0].GetDouble()),
+            static_cast<float>(colorFactorIt->value[1].GetDouble()),
+            static_cast<float>(colorFactorIt->value[2].GetDouble()));
     }
 
     // Sheen Color Texture
@@ -972,6 +996,7 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeSpecular(const
     Materials::Specular specular;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     // Specular Factor
@@ -992,12 +1017,12 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Materials::DeserializeSpecular(const
     const auto colorFactorIt = sit.FindMember("specularColorFactor");
     if (colorFactorIt != sit.MemberEnd())
     {
-        std::vector<float> colorFactor;
-        for (rapidjson::Value::ConstValueIterator ait = colorFactorIt->value.Begin(); ait != colorFactorIt->value.End(); ++ait)
-        {
-            colorFactor.push_back(static_cast<float>(ait->GetDouble()));
-        }
-        specular.colorFactor = Color3(colorFactor[0], colorFactor[1], colorFactor[2]);
+        RequireFixedSizeNumericArray(colorFactorIt->value, 3U,
+            "specularColorFactor must be a JSON array of 3 numeric elements");
+        specular.colorFactor = Color3(
+            static_cast<float>(colorFactorIt->value[0].GetDouble()),
+            static_cast<float>(colorFactorIt->value[1].GetDouble()),
+            static_cast<float>(colorFactorIt->value[2].GetDouble()));
     }
 
     // Specular Color Texture
@@ -1144,15 +1169,23 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::Nodes::DeserializeMeshGPUInstancing(
     Nodes::MeshGPUInstancing instancing;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const auto sit = doc.GetObject();
 
     const auto attributesIt = sit.FindMember("attributes");
     if (attributesIt != sit.MemberEnd())
     {
+        RequireObject(attributesIt->value,
+            "EXT_mesh_gpu_instancing.attributes must be a JSON object");
         const auto& attributes = attributesIt->value.GetObject();
 
         for (const auto& attribute : attributes)
         {
+            if (!attribute.value.IsUint())
+            {
+                throw InvalidGLTFException(
+                    "EXT_mesh_gpu_instancing.attributes values must be unsigned integers");
+            }
             auto name = attribute.name.GetString();
             instancing.attributes[name] = std::to_string(attribute.value.Get<uint32_t>());
         }
@@ -1239,6 +1272,7 @@ std::unique_ptr<Extension> GLTFSDK_API KHR::TextureInfos::DeserializeTextureTran
     TextureTransform textureTransform;
 
     auto doc = RapidJsonUtils::CreateDocumentFromString(json);
+    RequireObject(doc, "The extension value must be a JSON object");
     const rapidjson::Value& sit = doc;
 
     // Offset

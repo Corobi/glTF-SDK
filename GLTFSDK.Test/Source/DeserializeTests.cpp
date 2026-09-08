@@ -4,6 +4,7 @@
 #include "stdafx.h"
 
 #include <GLTFSDK/Deserialize.h>
+#include <GLTFSDK/Schema.h>
 #include <GLTFSDK/Validation.h>
 
 using namespace glTF::UnitTest;
@@ -301,6 +302,146 @@ namespace
     ],
     "asset": {"version": "2.0"}
 })";
+
+    // Node transform inputs used by ParseNodeMatrix / ParseNodeScale /
+    // ParseNodeTranslation / ParseNodeRotation. The deserializer is expected
+    // to require these JSON members to be arrays of the spec-mandated size
+    // whose elements are all numeric; anything else must be rejected with
+    // InvalidGLTFException rather than read with array accessors that are
+    // only well-defined on a JSON array of numbers.
+    const char* c_validNodeMatrix = R"({
+    "nodes": [{ "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeMatrixIsString = R"({
+    "nodes": [{ "matrix": "not-an-array" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeMatrixIsObject = R"({
+    "nodes": [{ "matrix": {} }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeMatrixWrongSize = R"({
+    "nodes": [{ "matrix": [1,2,3] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeMatrixNonNumericElement = R"({
+    "nodes": [{ "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,"x"] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_validNodeScale = R"({
+    "nodes": [{ "scale": [1,1,1] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeScaleIsString = R"({
+    "nodes": [{ "scale": "xyz" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeTranslationWrongSize = R"({
+    "nodes": [{ "translation": [0,0] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeRotationNonNumericElement = R"({
+    "nodes": [{ "rotation": [0,0,0,"w"] }],
+    "asset": {"version": "2.0"}
+})";
+
+    // Type-confusion regression inputs: a JSON value of the wrong type (string)
+    // where an object or array is required. With schema validation disabled these
+    // reach the semantic deserializers, which must throw rather than read the
+    // value's storage as a forged object/array member table.
+    const char* c_extensionsMemberIsString = R"({
+    "extensions": "not-an-object",
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_topLevelArrayMemberIsString = R"({
+    "materials": "not-an-array",
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_topLevelArrayElementIsString = R"({
+    "materials": ["not-an-object"],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_meshPrimitiveAttributesIsString = R"({
+    "meshes": [{ "primitives": [{ "attributes": "not-an-object" }] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_cameraPerspectiveIsString = R"({
+    "cameras": [{ "type": "perspective", "perspective": "not-an-object" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_cameraOrthographicIsString = R"({
+    "cameras": [{ "type": "orthographic", "orthographic": "not-an-object" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_pbrMetallicRoughnessIsString = R"({
+    "materials": [{ "pbrMetallicRoughness": "not-an-object" }],
+    "asset": {"version": "2.0"}
+})";
+
+    // Regression inputs for variable-length array members that the deserializer
+    // reads with rapidjson array accessors: node "children" (an array of node
+    // indices) and node/mesh "weights" (arrays of numbers, via the shared
+    // RapidJsonUtils::ToFloatArray helper). A present member of the wrong
+    // container type - or an array containing an element of the wrong type -
+    // must be rejected with InvalidGLTFException rather than read with accessors
+    // that are only well-defined on a JSON array of the expected element type.
+    // These pass SchemaFlags::DisableSchemaRoot so the malformed value reaches
+    // the semantic deserializers (a consumer that disables JSON-schema
+    // validation must still get a clean exception).
+    const char* c_validNodeChildren = R"({
+    "nodes": [{ "children": [1, 2] }, {}, {}],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeChildrenIsString = R"({
+    "nodes": [{ "children": "not-an-array" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeChildrenNonNumericElement = R"({
+    "nodes": [{ "children": ["not-a-node-index"] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_validNodeWeights = R"({
+    "nodes": [{ "weights": [0.25, 0.75] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeWeightsIsString = R"({
+    "nodes": [{ "weights": "not-an-array" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_nodeWeightsNonNumericElement = R"({
+    "nodes": [{ "weights": ["not-a-number"] }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_meshWeightsIsString = R"({
+    "meshes": [{ "weights": "not-an-array" }],
+    "asset": {"version": "2.0"}
+})";
+
+    const char* c_meshWeightsNonNumericElement = R"({
+    "meshes": [{ "weights": ["not-a-number"] }],
+    "asset": {"version": "2.0"}
+})";
 }
 
 namespace Microsoft
@@ -497,6 +638,37 @@ namespace Microsoft
                     });
                 }
 
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_BaseColorFactorTooFewElements)
+                {
+                    // A baseColorFactor array shorter than 4 elements was previously read past the parsed
+                    // elements when schema validation was disabled. The core parser must reject it regardless
+                    // of schema flags.
+                    const char* json = R"({
+    "asset": { "version": "2.0" },
+    "materials": [ { "pbrMetallicRoughness": { "baseColorFactor": [ 0.5 ] } } ]
+})";
+
+                    Assert::ExpectException<GLTFException>([&json]()
+                    {
+                        Deserialize(json, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_EmissiveFactorTooFewElements)
+                {
+                    // An emissiveFactor array shorter than 3 elements was previously read past the parsed
+                    // elements when schema validation was disabled.
+                    const char* json = R"({
+    "asset": { "version": "2.0" },
+    "materials": [ { "emissiveFactor": [ 0.5 ] } ]
+})";
+
+                    Assert::ExpectException<GLTFException>([&json]()
+                    {
+                        Deserialize(json, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
                 GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NegativeBufferLength)
                 {
                     Assert::ExpectException<ValidationException>([]()
@@ -584,6 +756,245 @@ namespace Microsoft
                     Assert::ExpectException<ValidationException>([]()
                     {
                         Deserialize(c_missingDependentPropertyBufferView);
+                    });
+                }
+
+                // Positive regression: a well-formed 16-element node matrix
+                // must still deserialize unchanged (Identity).
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeSuccess_ValidNodeMatrix)
+                {
+                    auto doc = Deserialize(c_validNodeMatrix);
+                    Assert::AreEqual(size_t(1), doc.nodes.Size());
+                    const auto& node = doc.nodes.Front();
+                    Assert::AreEqual(1.0f, node.matrix.values[0]);
+                    Assert::AreEqual(1.0f, node.matrix.values[5]);
+                    Assert::AreEqual(1.0f, node.matrix.values[10]);
+                    Assert::AreEqual(1.0f, node.matrix.values[15]);
+                }
+
+                // Negative regression: a node "matrix" that is a JSON string
+                // (or any non-array JSON value) must throw rather than be
+                // accepted as a 16-element matrix via accessors that are only
+                // defined on arrays.
+                //
+                // The negative tests below pass SchemaFlags::DisableSchemaRoot
+                // because consumers that disable JSON-schema validation for
+                // performance (a common option, since schema validation is
+                // expensive) must still get a clean exception out of the
+                // parser rather than read past the end of a non-array value.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeMatrixIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeMatrixIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeMatrixIsObject)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeMatrixIsObject, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeMatrixWrongSize)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeMatrixWrongSize, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeMatrixNonNumericElement)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeMatrixNonNumericElement, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeSuccess_ValidNodeScale)
+                {
+                    auto doc = Deserialize(c_validNodeScale);
+                    Assert::AreEqual(size_t(1), doc.nodes.Size());
+                    const auto& node = doc.nodes.Front();
+                    Assert::AreEqual(1.0f, node.scale.x);
+                    Assert::AreEqual(1.0f, node.scale.y);
+                    Assert::AreEqual(1.0f, node.scale.z);
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeScaleIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeScaleIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeTranslationWrongSize)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeTranslationWrongSize, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeRotationNonNumericElement)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeRotationNonNumericElement, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Negative regression: members that must be a JSON object or array
+                // but are given a string (or other wrong type) must throw rather
+                // than walk the value's storage as a forged member/element table.
+                // As with the node tests above, these pass SchemaFlags::DisableSchemaRoot
+                // so the type-confusion input reaches the semantic deserializers (a
+                // consumer that disables schema validation must still get a clean
+                // exception, not undefined behaviour).
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_ExtensionsMemberIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_extensionsMemberIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_TopLevelArrayMemberIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_topLevelArrayMemberIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_TopLevelArrayElementIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_topLevelArrayElementIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_MeshPrimitiveAttributesIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_meshPrimitiveAttributesIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_CameraPerspectiveIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_cameraPerspectiveIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_CameraOrthographicIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_cameraOrthographicIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_PbrMetallicRoughnessIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_pbrMetallicRoughnessIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Positive regression: a well-formed node "children" array of
+                // node indices must still deserialize to the expected ids.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeSuccess_ValidNodeChildren)
+                {
+                    auto doc = Deserialize(c_validNodeChildren);
+                    Assert::AreEqual(size_t(3), doc.nodes.Size());
+                    const auto& node = doc.nodes.Front();
+                    Assert::AreEqual(size_t(2), node.children.size());
+                    Assert::AreEqual(std::string("1"), node.children[0]);
+                    Assert::AreEqual(std::string("2"), node.children[1]);
+                }
+
+                // Negative regression: a node "children" member that is a JSON
+                // string (or any non-array value) must throw rather than be read
+                // with array accessors that are only defined on arrays.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeChildrenIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeChildrenIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Negative regression: a "children" array whose elements are not
+                // node indices must throw rather than read each element as a uint.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeChildrenNonNumericElement)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeChildrenNonNumericElement, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Positive regression: a well-formed node "weights" array of
+                // numbers must still deserialize. Uses SchemaFlags::DisableSchemaRoot
+                // because node "weights" has a JSON-schema dependency on "mesh";
+                // disabling schema validation exercises the parser's happy path
+                // (RapidJsonUtils::ToFloatArray) directly.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeSuccess_ValidNodeWeights)
+                {
+                    auto doc = Deserialize(c_validNodeWeights, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    Assert::AreEqual(size_t(1), doc.nodes.Size());
+                    const auto& node = doc.nodes.Front();
+                    Assert::AreEqual(size_t(2), node.weights.size());
+                }
+
+                // Negative regression: a node "weights" member that is a JSON
+                // string must throw (shared RapidJsonUtils::ToFloatArray helper).
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeWeightsIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeWeightsIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Negative regression: a node "weights" array whose elements are
+                // not numbers must throw rather than read each element as a number.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_NodeWeightsNonNumericElement)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_nodeWeightsNonNumericElement, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Negative regression: a mesh "weights" member that is a JSON
+                // string must throw. Mesh weights share the same ToFloatArray
+                // helper as node weights, so the guard must live in the helper.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_MeshWeightsIsString)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_meshWeightsIsString, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
+                    });
+                }
+
+                // Negative regression: a mesh "weights" array whose elements are
+                // not numbers must throw.
+                GLTFSDK_TEST_METHOD(DeserializeTests, DeserializeFail_MeshWeightsNonNumericElement)
+                {
+                    Assert::ExpectException<InvalidGLTFException>([]()
+                    {
+                        Deserialize(c_meshWeightsNonNumericElement, DeserializeFlags::None, SchemaFlags::DisableSchemaRoot);
                     });
                 }
             };
